@@ -62,4 +62,4 @@ sed -i 's/SELINUX=enforcing/SELINUX=disabled/g' /etc/selinux/config
 # ---------- 完成提示 ----------
 echo -e "\033[32m\n✅ 全部配置完成！\033[0m"
 echo -e "请用Xshell连接IP：\033[33m$(hostname -I | awk '{print $1}')\033[0m"
-echo -e "更多教程请关注公众号【YourWeChatID】"
+echo -e "更多教程请关注公众号【开发者星系】"
