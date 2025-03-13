@@ -1,108 +1,65 @@
 #!/bin/bash
-# Description: 系统配置脚本（静态IP/Yum源/NTP同步）
-# Author: Your Name
-# Date: $(date +%F)
+# Desc: CentOS7最小化安装后基础配置工具
+# Author: YourName
+# 功能：静态IP/SSH/Yum源/时间同步/安全基础设置
 
 # 检查root权限
-if [ $EUID -ne 0 ]; then
-    echo -e "\033[31m错误：必须使用root用户执行此脚本\033[0m"
+if [ $(id -u) != "0" ]; then
+    echo -e "\033[31m错误：必须使用root用户执行此脚本！\033[0m"
     exit 1
 fi
 
-# 定义颜色
-RED='\033[31m'
-GREEN='\033[32m'
-YELLOW='\033[33m'
-RESET='\033[0m'
+# 获取默认网卡名称（适配多网卡环境）
+NIC_NAME=$(ls /sys/class/net | grep -E 'ens|eth' | head -n 1)
+[ -z "$NIC_NAME" ] && NIC_NAME="ens33"
 
-# 配置静态网络
-config_static_ip() {
-    echo -e "${YELLOW}=== 开始配置静态网络 ===${RESET}"
-    
-    # 获取可用网卡
-    interfaces=($(ls /sys/class/net | grep -v lo))
-    echo "可用网络接口:"
-    for i in "${!interfaces[@]}"; do
-        echo "$((i+1)). ${interfaces[$i]}"
-    done
-
-    read -p "请选择网络接口序号 [1-${#interfaces[@]}]: " num
-    interface=${interfaces[$((num-1))]}
-
-    read -p "输入IP地址（示例：192.168.1.100）: " ip
-    read -p "输入子网掩码（示例：24）: " prefix
-    read -p "输入网关地址（示例：192.168.1.1）: " gateway
-    read -p "输入DNS服务器（示例：223.5.5.5）: " dns
-
-    # 备份原配置
-    cfg_file="/etc/sysconfig/network-scripts/ifcfg-${interface}"
-    cp "$cfg_file" "${cfg_file}.bak"
-
-    # 生成新配置
-    cat > "$cfg_file" << EOF
+# ---------- 静态网络配置 ----------
+echo -e "\033[36m[1/5] 配置静态网络...\033[0m"
+cat > /etc/sysconfig/network-scripts/ifcfg-$NIC_NAME << EOF
 TYPE=Ethernet
 BOOTPROTO=static
-NAME=${interface}
-DEVICE=${interface}
+NAME=$NIC_NAME
+DEVICE=$NIC_NAME
 ONBOOT=yes
-IPADDR=${ip}
-PREFIX=${prefix}
-GATEWAY=${gateway}
-DNS1=${dns}
+IPADDR=192.168.1.100
+NETMASK=255.255.255.0
+GATEWAY=192.168.1.1
+DNS1=8.8.8.8
+DNS2=114.114.114.114
 EOF
 
-    nmcli connection reload
-    nmcli connection down "${interface}" && nmcli connection up "${interface}"
-    echo -e "${GREEN}网络配置完成${RESET}"
-}
+systemctl restart network
+echo -e "网络状态检查："
+ip addr show $NIC_NAME | grep 'inet '
 
-# 更换yum源
-change_yum_source() {
-    echo -e "${YELLOW}=== 开始更换阿里云Yum源 ===${RESET}"
-    mv /etc/yum.repos.d/CentOS-Base.repo /etc/yum.repos.d/CentOS-Base.repo.bak
-    
-    # 自动获取系统版本
-    releasever=$(rpm -E %{rhel})
-    
-    curl -o /etc/yum.repos.d/CentOS-Base.repo \
-        https://mirrors.aliyun.com/repo/Centos-${releasever}.repo
-    
-    sed -i -e '/mirrors.cloud.aliyuncs.com/d' -e '/mirrors.aliyuncs.com/d' /etc/yum.repos.d/CentOS-Base.repo
-    yum clean all
-    yum makecache
-    echo -e "${GREEN}Yum源更换完成${RESET}"
-}
+# ---------- SSH服务配置 ----------
+echo -e "\033[36m[2/5] 配置SSH服务...\033[0m"
+yum install -y openssh-server > /dev/null 2>&1
+systemctl start sshd
+systemctl enable sshd
 
-# 配置时间同步
-config_ntp() {
-    echo -e "${YELLOW}=== 开始配置时间同步 ===${RESET}"
-    yum install -y chrony
-    
-    # 备份原配置
-    cp /etc/chrony.conf /etc/chrony.conf.bak
-    
-    # 使用阿里云NTP服务器
-    cat > /etc/chrony.conf << EOF
-server ntp.aliyun.com iburst
-server time1.cloud.tencent.com iburst
-driftfile /var/lib/chrony/drift
-makestep 1.0 3
-rtcsync
-logdir /var/log/chrony
-EOF
+# ---------- Yum源优化 ----------
+echo -e "\033[36m[3/5] 更换阿里云Yum源...\033[0m"
+mv /etc/yum.repos.d/CentOS-Base.repo /etc/yum.repos.d/CentOS-Base.repo.backup
+curl -s -o /etc/yum.repos.d/CentOS-Base.repo https://mirrors.aliyun.com/repo/Centos-7.repo
+yum clean all > /dev/null
+yum makecache > /dev/null
 
-    systemctl enable chronyd --now
-    timedatectl set-timezone Asia/Shanghai
-    chronyc sources -v
-    echo -e "${GREEN}时间同步配置完成${RESET}"
-}
+# ---------- 时间同步 ----------
+echo -e "\033[36m[4/5] 配置时间同步...\033[0m"
+yum install -y chrony > /dev/null 2>&1
+systemctl start chronyd
+systemctl enable chronyd
+chronyc -a makestep > /dev/null 2>&1
 
-# 执行主函数
-main() {
-    config_static_ip
-    change_yum_source
-    config_ntp
-    echo -e "${GREEN}\n所有配置已完成，建议重启系统！${RESET}"
-}
+# ---------- 安全基础设置 ----------
+echo -e "\033[36m[5/5] 基础安全设置...\033[0m"
+systemctl stop firewalld
+systemctl disable firewalld
+setenforce 0
+sed -i 's/SELINUX=enforcing/SELINUX=disabled/g' /etc/selinux/config
 
-main
+# ---------- 完成提示 ----------
+echo -e "\033[32m\n✅ 全部配置完成！\033[0m"
+echo -e "请用Xshell连接IP：\033[33m$(hostname -I | awk '{print $1}')\033[0m"
+echo -e "更多教程请关注公众号【YourWeChatID】"
